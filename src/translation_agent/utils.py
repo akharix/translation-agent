@@ -1,15 +1,17 @@
 import os
-from typing import List, Union
+import json
+from typing import List, Union, Dict, Any
 
-import openai
+import requests
 import tiktoken
 from dotenv import load_dotenv
 from icecream import ic
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from .ollama_client import ollama_client, ensure_model_available
+from .config import DEFAULT_OLLAMA_MODEL, get_model_config
 
 
 load_dotenv()  # read local .env file
-client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 MAX_TOKENS_PER_CHUNK = (
     1000  # if text is more than this many tokens, we'll break it up into
@@ -20,19 +22,19 @@ MAX_TOKENS_PER_CHUNK = (
 def get_completion(
     prompt: str,
     system_message: str = "You are a helpful assistant.",
-    model: str = "gpt-4-turbo",
+    model: str = None,
     temperature: float = 0.3,
     json_mode: bool = False,
 ) -> Union[str, dict]:
     """
-        Generate a completion using the OpenAI API.
+        Generate a completion using the Ollama API.
 
     Args:
         prompt (str): The user's prompt or query.
         system_message (str, optional): The system message to set the context for the assistant.
             Defaults to "You are a helpful assistant.".
-        model (str, optional): The name of the OpenAI model to use for generating the completion.
-            Defaults to "gpt-4-turbo".
+        model (str, optional): The name of the Ollama model to use for generating the completion.
+            Defaults to DEFAULT_OLLAMA_MODEL.
         temperature (float, optional): The sampling temperature for controlling the randomness of the generated text.
             Defaults to 0.3.
         json_mode (bool, optional): Whether to return the response in JSON format.
@@ -43,30 +45,26 @@ def get_completion(
             If json_mode is True, returns the complete API response as a dictionary.
             If json_mode is False, returns the generated text as a string.
     """
-
-    if json_mode:
-        response = client.chat.completions.create(
+    if model is None:
+        model = DEFAULT_OLLAMA_MODEL
+    
+    
+    # Ensure model is available
+    if not ensure_model_available(model):
+        raise Exception(f"Model {model} is not available and could not be pulled")
+    
+    try:
+        return ollama_client.generate(
             model=model,
+            prompt=prompt,
+            system=system_message,
             temperature=temperature,
-            top_p=1,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": prompt},
-            ],
+            format="json" if json_mode else None
         )
-        return response.choices[0].message.content
-    else:
-        response = client.chat.completions.create(
-            model=model,
-            temperature=temperature,
-            top_p=1,
-            messages=[
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": prompt},
-            ],
-        )
-        return response.choices[0].message.content
+        
+    except Exception as e:
+        ic(f"Error calling Ollama API: {e}")
+        raise Exception(f"Failed to get completion from Ollama: {e}")
 
 
 def one_chunk_initial_translation(

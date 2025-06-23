@@ -12,6 +12,7 @@ from process import (
     translator,
     translator_sec,
 )
+from patch import get_ollama_models
 
 
 def huanik(
@@ -85,14 +86,48 @@ def update_model(endpoint):
         "Groq": "llama3-70b-8192",
         "OpenAI": "gpt-4o",
         "TogetherAI": "Qwen/Qwen2-72B-Instruct",
-        "Ollama": "llama3",
+        "Ollama": "qwq:32b",
         "CUSTOM": "",
     }
+    
     if endpoint == "CUSTOM":
         base = gr.update(visible=True)
     else:
         base = gr.update(visible=False)
-    return gr.update(value=endpoint_model_map[endpoint]), base
+    
+    # For Ollama, provide model selection
+    if endpoint == "Ollama":
+        return gr.update(value=endpoint_model_map[endpoint]), base
+    else:
+        return gr.update(value=endpoint_model_map[endpoint]), base
+
+
+def get_ollama_model_choices():
+    """Get available Ollama models for dropdown."""
+    try:
+        models = get_ollama_models()
+        if models:
+            return models
+        else:
+            return ["llama3.1:8b", "llama3:8b", "mistral:7b"]
+    except:
+        return ["llama3.1:8b", "llama3:8b", "mistral:7b"]
+
+
+def update_model_choices(endpoint):
+    """Update model choices based on endpoint."""
+    if endpoint == "Ollama":
+        choices = get_ollama_model_choices()
+        return gr.update(choices=choices, value=choices[0] if choices else "llama3.1:8b")
+    else:
+        # Return to textbox for other endpoints
+        endpoint_model_map = {
+            "Groq": "llama3-70b-8192",
+            "OpenAI": "gpt-4o",
+            "TogetherAI": "Qwen/Qwen2-72B-Instruct",
+            "CUSTOM": "",
+        }
+        return gr.update(value=endpoint_model_map.get(endpoint, ""))
 
 
 def read_doc(path):
@@ -237,37 +272,42 @@ with gr.Blocks(theme="soft", css=CSS, fill_height=True) as demo:
         with gr.Column(scale=1) as menubar:
             endpoint = gr.Dropdown(
                 label="Endpoint",
-                choices=["OpenAI", "Groq", "TogetherAI", "Ollama", "CUSTOM"],
-                value="OpenAI",
+                choices=["Ollama", "OpenAI", "Groq", "TogetherAI", "CUSTOM"],
+                value="Ollama",
             )
             choice = gr.Checkbox(
                 label="Additional Endpoint",
                 info="Additional endpoint for reflection",
             )
-            model = gr.Textbox(
+            model = gr.Dropdown(
                 label="Model",
-                value="gpt-4o",
+                choices=get_ollama_model_choices(),
+                value="llama3.1:8b",
+                allow_custom_value=True,
             )
             api_key = gr.Textbox(
-                label="API_KEY",
+                label="API_KEY (not required for Ollama)",
                 type="password",
+                placeholder="Enter API key for non-Ollama endpoints",
             )
             base = gr.Textbox(label="BASE URL", visible=False)
             with gr.Column(visible=False) as AddEndpoint:
                 endpoint2 = gr.Dropdown(
                     label="Additional Endpoint",
                     choices=[
+                        "Ollama",
                         "OpenAI",
                         "Groq",
                         "TogetherAI",
-                        "Ollama",
                         "CUSTOM",
                     ],
-                    value="OpenAI",
+                    value="Ollama",
                 )
-                model2 = gr.Textbox(
+                model2 = gr.Dropdown(
                     label="Model",
-                    value="gpt-4o",
+                    choices=get_ollama_model_choices(),
+                    value="llama3.1:8b",
+                    allow_custom_value=True,
                 )
                 api_key2 = gr.Textbox(
                     label="API_KEY",
@@ -351,11 +391,13 @@ with gr.Blocks(theme="soft", css=CSS, fill_height=True) as demo:
         fn=update_menu, inputs=visible, outputs=[visible, menubar], js=JS
     )
     endpoint.change(fn=update_model, inputs=[endpoint], outputs=[model, base])
+    endpoint.change(fn=update_model_choices, inputs=[endpoint], outputs=[model])
 
     choice.select(fn=enable_sec, inputs=[choice], outputs=[AddEndpoint])
     endpoint2.change(
         fn=update_model, inputs=[endpoint2], outputs=[model2, base2]
     )
+    endpoint2.change(fn=update_model_choices, inputs=[endpoint2], outputs=[model2])
 
     start_ta = submit.click(
         fn=huanik,

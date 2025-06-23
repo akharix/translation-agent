@@ -1,5 +1,7 @@
 import os
 import time
+import requests
+import json
 from functools import wraps
 from threading import Lock
 from typing import Optional, Union
@@ -15,6 +17,8 @@ TEMPERATURE = 0.3
 # Hide js_mode in UI now, update in plan.
 JS_MODE = False
 ENDPOINT = ""
+OLLAMA_BASE_URL = ""
+OLLAMA_MODEL = ""
 
 
 # Add your LLMs here
@@ -50,9 +54,11 @@ def model_load(
         case "CUSTOM":
             client = openai.OpenAI(api_key=api_key, base_url=base_url)
         case "Ollama":
-            client = openai.OpenAI(
-                api_key="ollama", base_url="http://localhost:11434/v1"
-            )
+            # Use direct Ollama integration instead of OpenAI compatibility
+            global OLLAMA_BASE_URL, OLLAMA_MODEL
+            OLLAMA_BASE_URL = "http://localhost:11434"
+            OLLAMA_MODEL = model
+            client = None  # We'll use direct Ollama calls
         case _:
             client = openai.OpenAI(
                 api_key=api_key if api_key else os.getenv("OPENAI_API_KEY")
@@ -116,6 +122,10 @@ def get_completion(
     temperature = TEMPERATURE
     json_mode = JS_MODE
 
+    # Handle Ollama endpoint differently
+    if ENDPOINT == "Ollama":
+        return _ollama_completion(prompt, system_message, model, temperature, json_mode)
+    
     if json_mode:
         try:
             response = client.chat.completions.create(
@@ -145,6 +155,77 @@ def get_completion(
             return response.choices[0].message.content
         except Exception as e:
             raise gr.Error(f"An unexpected error occurred: {e}") from e
+
+
+def _ollama_completion(prompt: str, system_message: str, model: str, temperature: float, json_mode: bool) -> str:
+    """Handle Ollama API calls directly."""
+    full_prompt = f"System: {system_message}\n\nUser: {prompt}\n\nAssistant:"
+    
+    payload = {
+        "model": model,
+        "prompt": full_prompt,
+        "stream": False,
+        "options": {
+            "temperature": temperature,
+            "top_p": 1.0
+        }
+    }
+    
+    if json_mode:
+        payload["format"] = "json"
+    
+    try:
+        response = requests.post(
+            f"{OLLAMA_BASE_URL}/api/generate",
+            json=payload,
+            timeout=120
+        )
+        response.raise_for_status()
+        
+        result = response.json()
+        return result.get("response", "")
+        
+    except requests.exceptions.RequestException as e:
+        raise gr.Error(f"Ollama API error: {e}") from e
+    except json.JSONDecodeError as e:
+        raise gr.Error(f"Invalid Ollama response: {e}") from e
+
+
+def get_ollama_models():
+    """Get list of available Ollama models."""
+    try:
+        response = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=30)
+        response.raise_for_status()
+        
+        result = response.json()
+        models = result.get("models", [])
+        return [model.get("name", "") for model in models if model.get("name")]
+        
+    except requests.exceptions.RequestException:
+        # Return default models if can't connect
+        return ["llama3.1:8b", "llama3:8b", "mistral:7b", "qwen2:7b"]
+
+
+def ensure_ollama_model(model_name: str) -> bool:
+    """Ensure a model is available, pull if necessary."""
+    try:
+        # Check if model exists
+        available_models = get_ollama_models()
+        if model_name in available_models:
+            return True
+        
+        # Try to pull the model
+        payload = {"name": model_name}
+        response = requests.post(
+            f"{OLLAMA_BASE_URL}/api/pull",
+            json=payload,
+            timeout=300  # 5 minutes timeout
+        )
+        response.raise_for_status()
+        return True
+        
+    except requests.exceptions.RequestException:
+        return False
 
 
 utils.get_completion = get_completion
